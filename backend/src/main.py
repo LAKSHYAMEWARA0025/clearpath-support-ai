@@ -1,3 +1,12 @@
+import os
+import logging
+
+# --- 1. MUTE NOISY LIBRARIES (Must be at the absolute top) ---
+logging.getLogger("chromadb").setLevel(logging.ERROR)
+logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+
 import time
 import asyncio
 from typing import List, Dict, Any
@@ -5,7 +14,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
-# --- Imports from your other modules ---
+# --- 2. INTERNAL MODULE IMPORTS ---
 from retrieval import retrieve_context
 from router import classify_and_route_query
 from llm import generate_response
@@ -29,17 +38,17 @@ class ChatResponse(BaseModel):
     answer: str
     confidence_flag: bool
     flag_reason: str
-    model_used: str # Added for visibility
+    model_used: str
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     start_time = time.time()
     query = request.query
     
-    # 1. Layer 1: Retrieval (Now standardized to return a list of dicts)
+    # 1. Layer 1: Retrieval
     retrieved_chunks = retrieve_context(query)
     
-    # 2. Layer 2: Routing (Uses our new Weighted Scoring system)
+    # 2. Layer 2: Routing
     classification, model_name, route_reason = classify_and_route_query(query, retrieved_chunks)
     
     # 3. Layer 3: LLM Generation
@@ -48,71 +57,64 @@ async def chat_endpoint(request: ChatRequest):
     # 4. Layer 4: Evaluation
     is_flagged, flag_reason = evaluate_output(query, llm_answer, retrieved_chunks)
     
+    # --- Refined UX Logic: Filter Warnings ---
     final_answer = llm_answer
-    if is_flagged:
-        final_answer = f"⚠️ Low confidence — please verify with support.\n\n{llm_answer}"
+    # Only show warning for critical accuracy risks (not for honest refusals)
+    critical_risks = ["Hallucination", "Security", "Relevancy", "Structure"]
+    is_critical_flag = is_flagged and any(k in flag_reason for k in critical_risks)
+    
+    if is_critical_flag:
+        final_answer = f"⚠️ **Notice:** This response is auto-generated and may require verification.\n\n{llm_answer}"
         
     latency_ms = round((time.time() - start_time) * 1000)
     
-    # Log detailed routing info for your debugging
     router_log.info({
         "query": query, 
-        "classification": classification, 
         "model": model_name,
-        "reason": route_reason,
-        "latency_ms": latency_ms
+        "flagged": is_flagged,
+        "reason": flag_reason,
+        "latency": latency_ms
     })
     
     return ChatResponse(
         answer=final_answer,
-        confidence_flag=is_flagged,
+        confidence_flag=is_critical_flag,
         flag_reason=flag_reason,
         model_used=model_name
     )
 
 if __name__ == "__main__":
     async def run_terminal_test():
+        # Clear screen for a clean production look
+        os.system('cls' if os.name == 'nt' else 'clear')
+        
         print("\n" + "="*60)
-        print("🚀 CLEARPATH AI: FULL PIPELINE DEBUGGER 🚀")
+        print("🚀 CLEARPATH AI: BACKEND PRODUCTION READY 🚀")
         print("="*60)
         
         while True:
             user_input = input("\nENTER QUERY (or 'exit'): ")
             if user_input.lower() in ['exit', 'quit']: break
+            if not user_input.strip(): continue
                 
             try:
-                # Run the endpoint logic
                 start_test = time.time()
-                
-                # We fetch chunks here just for the debug print visibility
-                chunks = retrieve_context(user_input)
-                
-                print(f"\n🔍 [STEP 1: RETRIEVED {len(chunks)} CHUNKS]")
-                for i, c in enumerate(chunks[:3]):
-                    # Match keys to retrieval.py: 'document' and 'text'
-                    source = c.get("document", "Unknown")
-                    text = c.get("text", "")[:100].replace("\n", " ")
-                    print(f"   {i+1}. [{source}] | {text}...")
-
-                # Now run the actual pipeline
+                # Process through the API endpoint logic
                 response = await chat_endpoint(ChatRequest(query=user_input))
                 
-                print(f"\n🧠 [STEP 2: ROUTING & GENERATION]")
-                print(f"   Model Selected: {response.model_used}")
-                
-                print(f"\n🤖 [AI RESPONSE]:")
-                print(f"--------------------------------------------------")
+                print(f"\n[AI RESPONSE] — Model: {response.model_used}")
+                print("-" * 55)
                 print(response.answer)
-                print(f"--------------------------------------------------")
+                print("-" * 55)
                 
                 if response.confidence_flag:
-                    print(f"🚩 FLAG REASON: {response.flag_reason}")
+                    print(f"🚩 FLAG: {response.flag_reason}")
+                else:
+                    print(f"✅ STATUS: {response.flag_reason}")
                 
-                print(f"⏱️ TOTAL LATENCY: {round((time.time() - start_test)*1000)}ms")
+                print(f"⏱️ LATENCY: {round((time.time() - start_test)*1000)}ms")
 
             except Exception as e:
-                print(f"❌ CRITICAL ERROR: {str(e)}")
-                import traceback
-                traceback.print_exc()
+                print(f"❌ ERROR: {str(e)}")
 
     asyncio.run(run_terminal_test())

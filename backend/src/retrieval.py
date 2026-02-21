@@ -10,6 +10,7 @@ from config import CHROMA_DB_DIR
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
 # Initialize these GLOBALLY so they don't reload on every single API call (Massive speed boost)
 CHROMA_CLIENT = chromadb.PersistentClient(path=CHROMA_DB_DIR, settings=Settings(anonymized_telemetry=False))
 # BGE-M3 is powerful but slow to load; keeping it global saves 2-3 seconds per request
