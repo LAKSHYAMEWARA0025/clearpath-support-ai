@@ -1,18 +1,17 @@
 import os
 import logging
-
-# --- 1. MUTE NOISY LIBRARIES (Must be at the absolute top) ---
-logging.getLogger("chromadb").setLevel(logging.ERROR)
-logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-os.environ["ANONYMIZED_TELEMETRY"] = "False"
-
 import time
-import asyncio
-from typing import List, Dict, Any
+import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+
+# --- 1. SILENCE ALL NOISY LOGS ---
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+logging.getLogger('chromadb.telemetry.posthog').disabled = True
+logging.getLogger("chromadb").setLevel(logging.ERROR)
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # --- 2. INTERNAL MODULE IMPORTS ---
 from retrieval import retrieve_context
@@ -31,35 +30,49 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- 3. STARTUP LOG ---
+@app.on_event("startup")
+async def startup_event():
+    os.system('cls' if os.name == 'nt' else 'clear')
+    print("\n" + "="*50)
+    print("🚀 CLEARPATH AI CORE: ONLINE")
+    print("📡 ENDPOINT: http://localhost:8000/api/chat")
+    print("🛡️ STATUS: Ready for Frontend Queries")
+    print("="*50 + "\n")
+
 class ChatRequest(BaseModel):
     query: str
 
+# Updated to match the key:value pairs requested by the frontend
 class ChatResponse(BaseModel):
     answer: str
     confidence_flag: bool
     flag_reason: str
+    classification: str     # Added
     model_used: str
+    tokens_input: int       # Added
+    tokens_output: int      # Added
+    latency_ms: int
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     start_time = time.time()
     query = request.query
     
-    # 1. Layer 1: Retrieval
+    # 1. Retrieval
     retrieved_chunks = retrieve_context(query)
     
-    # 2. Layer 2: Routing
+    # 2. Routing (Capturing classification/route_reason)
     classification, model_name, route_reason = classify_and_route_query(query, retrieved_chunks)
     
-    # 3. Layer 3: LLM Generation
+    # 3. LLM Generation (Capturing token counts)
     llm_answer, tokens_input, tokens_output = generate_response(query, retrieved_chunks, model_name)
     
-    # 4. Layer 4: Evaluation
+    # 4. Evaluation
     is_flagged, flag_reason = evaluate_output(query, llm_answer, retrieved_chunks)
     
-    # --- Refined UX Logic: Filter Warnings ---
+    # UX Logic
     final_answer = llm_answer
-    # Only show warning for critical accuracy risks (not for honest refusals)
     critical_risks = ["Hallucination", "Security", "Relevancy", "Structure"]
     is_critical_flag = is_flagged and any(k in flag_reason for k in critical_risks)
     
@@ -68,53 +81,17 @@ async def chat_endpoint(request: ChatRequest):
         
     latency_ms = round((time.time() - start_time) * 1000)
     
-    router_log.info({
-        "query": query, 
-        "model": model_name,
-        "flagged": is_flagged,
-        "reason": flag_reason,
-        "latency": latency_ms
-    })
-    
+    # Final Response matching your new Frontend Log requirements
     return ChatResponse(
         answer=final_answer,
         confidence_flag=is_critical_flag,
         flag_reason=flag_reason,
-        model_used=model_name
+        classification=classification, # Passing the classification name (e.g., "Complex")
+        model_used=model_name,
+        tokens_input=tokens_input,
+        tokens_output=tokens_output,
+        latency_ms=latency_ms
     )
 
 if __name__ == "__main__":
-    async def run_terminal_test():
-        # Clear screen for a clean production look
-        os.system('cls' if os.name == 'nt' else 'clear')
-        
-        print("\n" + "="*60)
-        print("🚀 CLEARPATH AI: BACKEND PRODUCTION READY 🚀")
-        print("="*60)
-        
-        while True:
-            user_input = input("\nENTER QUERY (or 'exit'): ")
-            if user_input.lower() in ['exit', 'quit']: break
-            if not user_input.strip(): continue
-                
-            try:
-                start_test = time.time()
-                # Process through the API endpoint logic
-                response = await chat_endpoint(ChatRequest(query=user_input))
-                
-                print(f"\n[AI RESPONSE] — Model: {response.model_used}")
-                print("-" * 55)
-                print(response.answer)
-                print("-" * 55)
-                
-                if response.confidence_flag:
-                    print(f"🚩 FLAG: {response.flag_reason}")
-                else:
-                    print(f"✅ STATUS: {response.flag_reason}")
-                
-                print(f"⏱️ LATENCY: {round((time.time() - start_test)*1000)}ms")
-
-            except Exception as e:
-                print(f"❌ ERROR: {str(e)}")
-
-    asyncio.run(run_terminal_test())
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="error")
