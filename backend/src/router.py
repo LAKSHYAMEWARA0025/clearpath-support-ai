@@ -1,80 +1,57 @@
 import re
 from config import MODEL_8B, MODEL_70B
 
-# 1. Define distinct domain keywords for Cross-Domain Detection
-DOMAIN_RULES = {
-    "Technical": ["api", "webhook", "architecture", "deployment", "json", "endpoint"],
-    "Support": ["error", "troubleshooting", "failed", "not working", "bug", "ticket", "sla"],
-    "Pricing": ["pricing", "cost", "plan", "upgrade", "enterprise", "free", "tier", "billing"],
-    "Product": ["how to", "guide", "tutorial", "shortcut", "dashboard", "export"]
-}
-
-# 2. Define strict reasoning markers
-REASONING_MARKERS = [
-    "why", "reason", "cause", "how come",  # Causal
-    "vs", "difference", "compare", "better", "instead",  # Comparison
-    "after", "before", "then", "step", "first", "next"  # Sequential
+# Markers that genuinely require high-reasoning capabilities
+COMPLEX_INTENT_MARKERS = [
+    "compare", "difference", "vs", "versus", "better", "pros and cons",
+    "why", "reason", "cause", "explain the relationship",
+    "step by step", "guide me", "how do i setup", "integrate", "troubleshoot"
 ]
 
-def count_domains_triggered(query_lower: str) -> int:
-    """Helper function to count how many distinct domains a query spans."""
-    triggered_domains = 0
-    for domain, keywords in DOMAIN_RULES.items():
-        for kw in keywords:
-            if re.search(rf'\b{re.escape(kw)}\b', query_lower):
-                triggered_domains += 1
-                break  # Once a domain is triggered, stop checking its other keywords
-    return triggered_domains
-
-def classify_and_route_query(query: str):
+def classify_and_route_query(query: str, retrieved_chunks: list):
     """
-    Deterministic, rule-based router to select the appropriate LLM.
-    Returns: (classification, model_string, trigger_reason)
+    Weighted Router: Decides model based on a combined score of 
+    intent markers, query length, and document diversity.
     """
     query_lower = query.lower()
-    
-    # Rule 1: Query Length (> 20 words implies heavy context/background info)
-    word_count = len(query_lower.split())
-    if word_count > 20:
-        return "complex", MODEL_70B, "Length > 20 words"
-        
-    # Rule 2: Multiple Questions
-    if query.count("?") > 1:
-        return "complex", MODEL_70B, "Multiple questions detected"
-        
-    # Rule 3: Cross-Domain Detection (Requires merging distinct knowledge bases)
-    domains_triggered = count_domains_triggered(query_lower)
-    if domains_triggered >= 2:
-        return "complex", MODEL_70B, f"Cross-domain query ({domains_triggered} domains)"
-        
-    # Rule 4: Reasoning & Troubleshooting Markers
-    for marker in REASONING_MARKERS:
+    score = 0
+    reasons = []
+
+    # 1. FIX FOR "TypeError": Ensure retrieved_chunks is handled safely
+    unique_documents = set()
+    for chunk in retrieved_chunks:
+        if isinstance(chunk, dict):
+            unique_documents.add(chunk.get('document') or chunk.get('source') or "Unknown")
+        elif isinstance(chunk, str):
+            source_match = re.search(r"Source:\s*([\w\.-]+)", chunk)
+            unique_documents.add(source_match.group(1) if source_match else f"raw_{hash(chunk)}")
+
+    # 2. EVALUATE INTENT (+3 points) - This is the strongest signal
+    for marker in COMPLEX_INTENT_MARKERS:
         if re.search(rf'\b{re.escape(marker)}\b', query_lower):
-            return "complex", MODEL_70B, f"Reasoning marker '{marker}'"
-            
-    # Explicitly check for Support/Troubleshooting words as they always need reasoning
-    for kw in DOMAIN_RULES["Support"]:
-        if re.search(rf'\b{re.escape(kw)}\b', query_lower):
-            return "complex", MODEL_70B, f"Troubleshooting keyword '{kw}'"
+            score += 3
+            reasons.append(f"Intent: {marker}")
+            break
 
-    # Fallback: Simple lookup (e.g., greetings, single facts)
-    return "simple", MODEL_8B, "Default fallback (Simple fact lookup)"
+    # 3. EVALUATE LENGTH (+1 point)
+    word_count = len(query_lower.split())
+    if word_count > 18:
+        score += 1
+        reasons.append("High word count")
 
-# --- Test Block ---
-if __name__ == "__main__":
-    test_queries = [
-        "What is ClearPath?", 
-        "How much is the enterprise plan?",
-        "What is the difference between Pro and Enterprise?", # Should trigger Comparison
-        "My API webhook is throwing an error.", # Should trigger Support/Troubleshooting
-        "How much does the API cost?", # Should trigger Cross-Domain (Tech + Pricing)
-        "I am trying to set up a new project for my team of 30 people and I need to know if the billing cycle is monthly or annually before I commit?", # Should trigger Length
-        "What is the SLA? And how do I export my dashboard?" # Should trigger Multiple Questions
-    ]
+    # 4. EVALUATE DOCUMENT DIVERSITY (+1 point)
+    # Finding 2 docs is common; only 3+ docs suggests a complex synthesis.
+    if len(unique_documents) >= 3:
+        score += 1
+        reasons.append(f"Diversity: {len(unique_documents)} docs")
+
+    # --- DECISION LOGIC ---
+    # Score >= 3: Route to Llama-3.3-70B
+    # Score < 3: Route to Llama-3.1-8B
     
-    print("\n--- Testing Deterministic Router ---\n")
-    for q in test_queries:
-        classification, model, reason = classify_and_route_query(q)
-        print(f"Query: '{q}'")
-        print(f"Route: [{classification.upper()}] -> {model}")
-        print(f"Why? : {reason}\n")
+    routing_reason = ", ".join(reasons) if reasons else "Simple factual lookup"
+    
+    if score >= 3:
+        return "complex", MODEL_70B, f"Escalated: {routing_reason} (Score: {score})"
+    
+    return "simple", MODEL_8B, f"Handled by 8B: {routing_reason} (Score: {score})"
