@@ -33,6 +33,7 @@ app.add_middleware(
 # --- 3. STARTUP LOG ---
 @app.on_event("startup")
 async def startup_event():
+    # Clear terminal for a professional look
     os.system('cls' if os.name == 'nt' else 'clear')
     print("\n" + "="*50)
     print("🚀 CLEARPATH AI CORE: ONLINE")
@@ -43,15 +44,14 @@ async def startup_event():
 class ChatRequest(BaseModel):
     query: str
 
-# Updated to match the key:value pairs requested by the frontend
 class ChatResponse(BaseModel):
     answer: str
     confidence_flag: bool
     flag_reason: str
-    classification: str     # Added
+    classification: str 
     model_used: str
-    tokens_input: int       # Added
-    tokens_output: int      # Added
+    tokens_input: int 
+    tokens_output: int
     latency_ms: int
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -59,34 +59,47 @@ async def chat_endpoint(request: ChatRequest):
     start_time = time.time()
     query = request.query
     
-    # 1. Retrieval
+    # 1. Layer 1: Retrieval
     retrieved_chunks = retrieve_context(query)
     
-    # 2. Routing (Capturing classification/route_reason)
+    # 2. Layer 2: Routing 
+    # classification returns "simple" or "complex" based on your score logic
     classification, model_name, route_reason = classify_and_route_query(query, retrieved_chunks)
     
-    # 3. LLM Generation (Capturing token counts)
+    # 3. Layer 3: LLM Generation
     llm_answer, tokens_input, tokens_output = generate_response(query, retrieved_chunks, model_name)
     
-    # 4. Evaluation
+    # 4. Layer 4: Evaluation
+    # is_flagged is boolean, flag_reason is the status (e.g., "Passed", "Refusal", "No Context")
     is_flagged, flag_reason = evaluate_output(query, llm_answer, retrieved_chunks)
     
-    # UX Logic
+    # --- Refined UX Logic ---
     final_answer = llm_answer
-    critical_risks = ["Hallucination", "Security", "Relevancy", "Structure"]
+    # We flag the response if the evaluator found a critical issue
+    critical_risks = ["Hallucination", "Security", "Relevancy", "Structure", "Refusal", "No Context"]
     is_critical_flag = is_flagged and any(k in flag_reason for k in critical_risks)
     
     if is_critical_flag:
-        final_answer = f"⚠️ **Notice:** This response is auto-generated and may require verification.\n\n{llm_answer}"
+        # User-facing message as per assignment requirement
+        final_answer = f"⚠️ **Low confidence — please verify with support.**\n\n{llm_answer}"
         
     latency_ms = round((time.time() - start_time) * 1000)
     
-    # Final Response matching your new Frontend Log requirements
+    # Final structured log for the terminal/backend logger
+    router_log.info({
+        "query": query, 
+        "classification": classification,
+        "model": model_name,
+        "tokens_in": tokens_input,
+        "tokens_out": tokens_output,
+        "latency": latency_ms
+    })
+    
     return ChatResponse(
         answer=final_answer,
         confidence_flag=is_critical_flag,
-        flag_reason=flag_reason,
-        classification=classification, # Passing the classification name (e.g., "Complex")
+        flag_reason=flag_reason,        # e.g., "Passed"
+        classification=classification,  # e.g., "complex"
         model_used=model_name,
         tokens_input=tokens_input,
         tokens_output=tokens_output,

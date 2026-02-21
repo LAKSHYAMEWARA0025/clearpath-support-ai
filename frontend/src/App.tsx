@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Terminal, Cpu, Database, Activity, Code } from 'lucide-react';
+import { Send, Terminal, Database, Activity, Clock } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import axios from 'axios';
 import './App.css';
@@ -10,10 +10,10 @@ interface Message {
   model?: string;
 }
 
-// Updated interface to include tokens
 interface RoutingLog {
   query: string;
-  classification: string;
+  complexity: string; // "simple" or "complex"
+  evaluator_result: string; // The flag_reason (Passed, No Context, etc.)
   model_used: string;
   tokens_input: number;
   tokens_output: number;
@@ -56,6 +56,9 @@ const App: React.FC = () => {
         query: currentQuery 
       });
       
+      // Frontend-side routing inference
+      const complexity = data.model_used.includes('8b') ? 'simple' : 'complex';
+
       setMessages(prev => [...prev, { 
         role: 'ai', 
         content: data.answer, 
@@ -64,7 +67,8 @@ const App: React.FC = () => {
       
       setLogs(prev => [{
         query: currentQuery,
-        classification: data.flag_reason,
+        complexity: complexity,
+        evaluator_result: data.flag_reason,
         model_used: data.model_used,
         tokens_input: data.tokens_input,
         tokens_output: data.tokens_output,
@@ -119,7 +123,6 @@ const App: React.FC = () => {
           </form>
         </section>
 
-        {/* LOGS SIDEBAR WITH KEY-VALUE FORMAT */}
         <aside className="logs-sidebar">
           <div className="logs-header">
             <Terminal size={18} color="#a78bfa" />
@@ -133,7 +136,9 @@ const App: React.FC = () => {
                 <div className="json-block">
                   <span className="json-key">"query"</span>: <span className="json-string">"{log.query}"</span>,
                   <br />
-                  <span className="json-key">"classification"</span>: <span className="json-string">"{log.classification}"</span>,
+                  <span className="json-key">"complexity"</span>: <span className="json-string">"{log.complexity}"</span>,
+                  <br />
+                  <span className="json-key">"eval_result"</span>: <span className="json-string">"{log.evaluator_result}"</span>,
                   <br />
                   <span className="json-key">"model_used"</span>: <span className="json-string">"{log.model_used}"</span>,
                   <br />
@@ -141,7 +146,7 @@ const App: React.FC = () => {
                   <br />
                   <span className="json-key">"tokens_out"</span>: <span className="json-num">{log.tokens_output}</span>,
                   <br />
-                  <span className="json-key">"latency"</span>: <span className="json-num">{log.latency_ms}</span>
+                  <span className="json-key">"latency"</span>: <span className="json-num">{log.latency_ms}ms</span>
                 </div>
               </div>
             ))}

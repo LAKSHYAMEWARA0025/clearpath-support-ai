@@ -10,48 +10,43 @@ COMPLEX_INTENT_MARKERS = [
 
 def classify_and_route_query(query: str, retrieved_chunks: list):
     """
-    Weighted Router: Decides model based on a combined score of 
-    intent markers, query length, and document diversity.
+    Deterministic Rule-Based Router: Decides model based on score.
+    Returns: (classification_label, model_string, routing_reason)
     """
     query_lower = query.lower()
     score = 0
     reasons = []
 
-    # 1. FIX FOR "TypeError": Ensure retrieved_chunks is handled safely
-    unique_documents = set()
-    for chunk in retrieved_chunks:
-        if isinstance(chunk, dict):
-            unique_documents.add(chunk.get('document') or chunk.get('source') or "Unknown")
-        elif isinstance(chunk, str):
-            source_match = re.search(r"Source:\s*([\w\.-]+)", chunk)
-            unique_documents.add(source_match.group(1) if source_match else f"raw_{hash(chunk)}")
-
-    # 2. EVALUATE INTENT (+3 points) - This is the strongest signal
+    # 1. Evaluate Intent (+3 points) - Rule: Specific complex keywords
     for marker in COMPLEX_INTENT_MARKERS:
         if re.search(rf'\b{re.escape(marker)}\b', query_lower):
             score += 3
-            reasons.append(f"Intent: {marker}")
+            reasons.append(f"Intent detected: {marker}")
             break
 
-    # 3. EVALUATE LENGTH (+1 point)
+    # 2. Evaluate Length (+1 point) - Rule: Long queries suggest complexity
     word_count = len(query_lower.split())
     if word_count > 18:
         score += 1
         reasons.append("High word count")
 
-    # 4. EVALUATE DOCUMENT DIVERSITY (+1 point)
-    # Finding 2 docs is common; only 3+ docs suggests a complex synthesis.
-    if len(unique_documents) >= 3:
+    # 3. Evaluate Document Diversity (+1 point) - Rule: Multiple sources need synthesis
+    unique_docs = set()
+    for chunk in retrieved_chunks:
+        # Assuming metadata is attached to chunks; adjust key as per your retrieval.py
+        source = chunk.get('metadata', {}).get('source', 'Unknown') if isinstance(chunk, dict) else "Unknown"
+        unique_docs.add(source)
+    
+    if len(unique_docs) >= 3:
         score += 1
-        reasons.append(f"Diversity: {len(unique_documents)} docs")
+        reasons.append(f"Source diversity: {len(unique_docs)} files")
 
     # --- DECISION LOGIC ---
-    # Score >= 3: Route to Llama-3.3-70B
-    # Score < 3: Route to Llama-3.1-8B
-    
-    routing_reason = ", ".join(reasons) if reasons else "Simple factual lookup"
+    routing_summary = ", ".join(reasons) if reasons else "Simple factual lookup"
     
     if score >= 3:
-        return "complex", MODEL_70B, f"Escalated: {routing_reason} (Score: {score})"
+        # classification = "complex"
+        return "complex", MODEL_70B, f"Escalated (Score {score}): {routing_summary}"
     
-    return "simple", MODEL_8B, f"Handled by 8B: {routing_reason} (Score: {score})"
+    # classification = "simple"
+    return "simple", MODEL_8B, f"Basic (Score {score}): {routing_summary}"
