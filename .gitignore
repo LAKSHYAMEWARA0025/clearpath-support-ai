@@ -1,0 +1,12 @@
+# Environments
+backend/venv/
+
+# Environment variables
+backend/.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local Vector DB
+data/chromadb/
